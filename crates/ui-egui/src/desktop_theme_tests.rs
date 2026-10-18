@@ -97,6 +97,7 @@ fn portal(bus: &PrivateBus, setting: &Arc<Mutex<Setting>>) -> Connection {
         .unwrap()
 }
 
+/// Notify of a setting change; the watcher must reread rather than trust the signal value.
 fn emit(connection: &Connection, namespace: &str, key: &str) {
     connection
         .emit_signal(
