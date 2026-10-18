@@ -7,6 +7,7 @@ use zbus::blocking::Connection;
 struct PrivateBus(Child, String);
 
 impl PrivateBus {
+    /// Start an isolated broker, optionally reusing its address after a restart.
     fn start(address: Option<&str>) -> Self {
         let mut command = Command::new("dbus-daemon");
         command.args(["--session", "--nofork", "--print-address=1"]).stdout(Stdio::piped());
@@ -33,9 +34,22 @@ impl Drop for PrivateBus {
 #[derive(Default)]
 struct Setting {
     dark: bool,
-    fail: bool,
+    error: Option<PortalError>,
     switch_during_read: bool,
     reads: usize,
+}
+
+#[derive(Clone, Debug, zbus::DBusError)]
+#[zbus(prefix = "org.freedesktop")]
+enum PortalError {
+    #[zbus(name = "portal.Error.NotFound")]
+    NotFound(String),
+    #[zbus(name = "DBus.Error.ServiceUnknown")]
+    ServiceUnknown(String),
+    #[zbus(name = "DBus.Error.Failed")]
+    Failed(String),
+    #[zbus(error)]
+    ZBus(zbus::Error),
 }
 
 struct Portal(Arc<Mutex<Setting>>);
@@ -47,15 +61,15 @@ impl Portal {
         namespace: &str,
         key: &str,
         #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<zbus::zvariant::OwnedValue> {
+    ) -> Result<zbus::zvariant::OwnedValue, PortalError> {
         let (dark, switch) = {
             let mut setting = self.0.lock().unwrap();
             setting.reads += 1;
-            if setting.fail {
-                return Err(zbus::fdo::Error::Failed("temporarily unavailable".into()));
-            }
             if namespace != SCHEMAS[0] || key != "color-scheme" {
-                return Err(zbus::fdo::Error::UnknownProperty(key.into()));
+                return Err(PortalError::NotFound(key.into()));
+            }
+            if let Some(error) = &setting.error {
+                return Err(error.clone());
             }
             let answer = (setting.dark, setting.switch_during_read);
             if setting.switch_during_read {
@@ -71,6 +85,7 @@ impl Portal {
     }
 }
 
+/// Export a controllable Settings service before acquiring the portal name.
 fn portal(bus: &PrivateBus, setting: &Arc<Mutex<Setting>>) -> Connection {
     zbus::blocking::connection::Builder::address(bus.1.as_str())
         .unwrap()
@@ -94,6 +109,7 @@ fn emit(connection: &Connection, namespace: &str, key: &str) {
         .unwrap();
 }
 
+/// Bound asynchronous checks so a broken watcher fails rather than hanging.
 fn wait_until(mut ready: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while !ready() {
@@ -128,10 +144,10 @@ fn subscriptions_recover_reads_and_restarts_without_idle_polling() {
     assert_eq!(setting.lock().unwrap().reads, count, "idle and unrelated signals must not read");
 
     setting.lock().unwrap().dark = true;
-    setting.lock().unwrap().fail = true;
+    setting.lock().unwrap().error = Some(PortalError::Failed("temporarily unavailable".into()));
     emit(&service, SCHEMAS[0], "color-scheme");
     wait_until(|| setting.lock().unwrap().reads >= count + 3);
-    setting.lock().unwrap().fail = false;
+    setting.lock().unwrap().error = None;
     // No further signal: recovery must come from retrying the failed read.
     assert_eq!(changes.recv_timeout(Duration::from_secs(3)).unwrap(), Some(true));
 
@@ -182,4 +198,22 @@ fn dropping_an_idle_or_retrying_watcher_releases_its_callback() {
         wait_until(|| Arc::strong_count(&released) == 1);
     }
     service.close().unwrap();
+}
+
+/// Missing settings/services keep the subscription; transient failures still request a retry.
+#[test]
+fn permanent_errors_keep_the_bus_but_transient_failures_clear_it() {
+    let bus = PrivateBus::start(None);
+    let setting = Arc::new(Mutex::new(Setting::default()));
+    let _service = portal(&bus, &setting);
+    let mut reader = Bus(Some(zbus::blocking::connection::Builder::address(bus.1.as_str()).unwrap().build().unwrap()));
+    for error in [PortalError::NotFound("missing setting".into()), PortalError::ServiceUnknown("missing service".into())] {
+        setting.lock().unwrap().error = Some(error);
+        assert_eq!(read(&mut reader), None);
+        assert!(reader.0.is_some(), "permanent errors must preserve the connection");
+    }
+    // The standard read fails transiently while the legacy keys return NotFound.
+    setting.lock().unwrap().error = Some(PortalError::Failed("temporarily unavailable".into()));
+    assert_eq!(read(&mut reader), None);
+    assert!(reader.0.is_none(), "a missing legacy key must not hide a transient failure");
 }

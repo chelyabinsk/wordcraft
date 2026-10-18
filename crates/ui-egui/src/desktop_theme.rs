@@ -62,6 +62,7 @@ impl DesktopTheme {
         }
     }
 
+    /// Inject the connection factory and retry delay for isolated watcher tests.
     #[cfg(target_os = "linux")]
     fn start_with(
         changed: impl Fn() + Send + 'static,
@@ -248,28 +249,35 @@ impl Bus {
     }
 }
 
-/// Ask the portal once, over `bus`'s connection (opened when there is none). D-Bus calls
-/// block, so this belongs off the UI thread. A connection whose calls all fail is dropped, so
-/// a later read opens a fresh one (the bus or portal may have restarted).
+/// Ask the portal over `bus`'s connection; blocking calls belong off the UI thread.
+/// Missing settings/services keep the subscription; transient failures discard it for a retry.
 #[cfg(target_os = "linux")]
 fn read(bus: &mut Bus) -> Option<bool> {
     if bus.0.is_none() {
         bus.0 = zbus::blocking::Connection::session().ok();
     }
     let connection = bus.0.as_ref()?;
-    let mut answered = false;
+    let mut failed = false;
     for schema in SCHEMAS {
-        let Ok(reply) = connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, "color-scheme"))
-        else {
-            continue;
-        };
-        answered = true;
+        let reply =
+            match connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, "color-scheme")) {
+                Ok(reply) => reply,
+                Err(zbus::Error::MethodError(name, _, _))
+                    if matches!(name.as_str(), "org.freedesktop.portal.Error.NotFound" | "org.freedesktop.DBus.Error.ServiceUnknown") =>
+                {
+                    continue;
+                }
+                Err(_) => {
+                    failed = true;
+                    continue;
+                }
+            };
         let Ok((answer,)) = reply.body().deserialize::<(zbus::zvariant::OwnedValue,)>() else { continue };
         if let Some(dark) = parse(&answer) {
             return Some(dark);
         }
     }
-    if !answered {
+    if failed {
         bus.0 = None;
     }
     None
@@ -387,6 +395,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
+#[cfg(target_os = "linux")]
 #[path = "desktop_theme_tests.rs"]
 mod integration_tests;
