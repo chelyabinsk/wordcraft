@@ -593,12 +593,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
 /// The ribbon's persistent toggle: bottom-right when expanded, on the tab strip when collapsed.
 fn ribbon_toggle(app: &mut WordApp, ui: &mut Ui, rect: Rect) {
-    let label = tl!(if app.ui.ribbon_collapsed { "Expand ribbon" } else { "Collapse ribbon" });
+    let label = tl!(if app.ribbon_preview {
+        "Pin ribbon"
+    } else if app.ui.ribbon_collapsed {
+        "Expand ribbon"
+    } else {
+        "Collapse ribbon"
+    });
     let response = ui.interact(rect, egui::Id::new("ribbon_toggle"), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     let style = crate::widgets::drawn_state(ui, &response, false);
     ui.painter().rect_filled(rect, 4.0, style.fill);
-    let icon = if app.ui.ribbon_collapsed { "chevronDown" } else { "chevronUp" };
+    let icon = if app.ribbon_preview {
+        "pin"
+    } else if app.ui.ribbon_collapsed {
+        "chevronDown"
+    } else {
+        "chevronUp"
+    };
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, style.text, style.text);
     if response.on_hover_text(label).clicked() {
         let _ = app.run("ui.collapseRibbon", json!({}));
@@ -3063,9 +3075,13 @@ mod tests {
         assert!(!h.state().ribbon_preview && h.state().ui.ribbon_collapsed);
         h.get_by_label("Home").click();
         h.run_steps(4);
-        h.get_by_label("Expand ribbon").click();
+        assert!(h.query_by_label("Expand ribbon").is_none(), "temporary reveal offers pinning, not an expand arrow");
+        h.get_by_label("Pin ribbon").click();
         h.run_steps(3);
         assert!(!h.state().ribbon_preview && !h.state().ui.ribbon_collapsed);
+        h.get_by_label("Collapse ribbon").click();
+        h.run_steps(3);
+        assert!(h.state().ui.ribbon_collapsed && !h.state().ribbon_preview);
     }
 
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
