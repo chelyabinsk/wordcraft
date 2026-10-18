@@ -647,6 +647,7 @@ impl SaveChoice {
 }
 
 impl WordApp {
+    /// Create an editor for a session with fresh transient view and interaction state.
     pub fn new(session: Session, services: Services) -> Self {
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {

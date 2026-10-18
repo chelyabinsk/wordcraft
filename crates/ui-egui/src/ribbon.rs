@@ -246,6 +246,7 @@ pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
 }
 
+/// Draw the tabs and pinned ribbon, or temporarily overlay commands for a collapsed tab.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     if app.session.view.read_mode {
