@@ -213,6 +213,11 @@ pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
     }
 }
 
+/// Whether this control belongs to the single-line ribbon; popup contents keep their normal layout.
+pub(crate) fn single_line(ui: &Ui) -> bool {
+    ui.stack().iter().find_map(|s| s.tags().get_downcast::<bool>("single_line_ribbon").copied()).unwrap_or(false)
+}
+
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
     big_button(ui, app, icon, label, id, params, menu, false)
@@ -241,9 +246,13 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
     }
 }
 
+/// Reuse a command as a large classic button or a small icon in the single-line ribbon.
 #[allow(clippy::too_many_arguments)]
 fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
     let label = tl!(label);
+    if single_line(ui) {
+        return small(ui, app, icon, None, &label.replace('\n', " "), if menu { "" } else { id }, params, checked);
+    }
     let t = Tokens::get(ui.ctx());
     let galley_w =
         label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
@@ -273,7 +282,7 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     // A compact group (#662) shows only the icon; the tooltip keeps the name.
-    let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));
+    let label = label.filter(|_| !single_line(ui) && !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
@@ -356,8 +365,9 @@ pub fn menu_button(
     id: &str,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
+    let big_btn = big_btn && !single_line(ui);
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
-    let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
+    let label = label.filter(|_| !single_line(ui) && (big_btn || !crate::ribbon_fit::compact(ui.ctx())));
     let t = Tokens::get(ui.ctx());
     // `id` names the command the menu is about (Header for the Header menu…); while it is
     // disabled the button greys out and doesn't open, like the other ribbon buttons. "" = always on.
@@ -421,6 +431,38 @@ pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp
 
 /// A ribbon group whose title is shown as is (a custom group's name, Customize Ribbon).
 pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
+    if single_line(ui) {
+        let controls = |ui: &mut Ui, app: &mut WordApp| {
+            add(ui, app);
+            if let Some(id) = launcher {
+                let tip = crate::i18n::fmt(tl!("{group} settings"), &[("group", title)]);
+                small(ui, app, "launcher", None, &tip, id, serde_json::json!({}), false);
+            }
+        };
+        // Galleries and field grids keep their original controls in popups rather than stretching the row.
+        if app.ui.tab == "Equation"
+            || matches!(
+                id_title,
+                "Styles" | "Document Formatting" | "Layouts" | "Table Styles" | "Table Style Options" | "Alignment" | "Drawing Tools" | "Symbols"
+            )
+            || (app.ui.tab == "Layout" && id_title == "Paragraph")
+            || (app.ui.tab == "Table Layout" && matches!(id_title, "Cell Size" | "Data"))
+        {
+            menu_button(ui, app, group_icon(id_title), None, title, false, "", |ui, app| {
+                ui.horizontal_top(|ui| controls(ui, app));
+            });
+        } else {
+            let row = ui.horizontal_centered(|ui| controls(ui, app));
+            #[cfg(test)]
+            if row.response.rect.height() > 22.5 {
+                TALL_GROUPS.with(|g| g.borrow_mut().push(format!("{id_title}: {:.1}", row.response.rect.height())));
+            }
+            #[cfg(not(test))]
+            let _ = row;
+        }
+        ui.separator();
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let start = ui.cursor().min;
     // #662: the window may be too narrow for the tab; the plan says how this group fits.
@@ -624,6 +666,10 @@ pub fn command_menu(resp: &Response, app: &mut WordApp, id: &str) {
 /// "Customize the Ribbon…" and "Customize Quick Access Toolbar…" (context menus), and "Show
 /// Quick Access Toolbar" while the toolbar is hidden (#1945).
 pub fn customize_menu_items(ui: &mut Ui, app: &mut WordApp) {
+    if ui.selectable_label(app.ui.single_line_ribbon, tl!("Single-line ribbon")).clicked() {
+        let _ = app.run("ui.singleLineRibbon", serde_json::json!({}));
+        ui.close();
+    }
     if !app.ui.quick_access_toolbar && ui.button(tl!("Show Quick Access Toolbar")).clicked() {
         let _ = app.run("ui.quickAccessToolbar", serde_json::json!({"value": true}));
         ui.close();
