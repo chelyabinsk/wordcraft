@@ -295,6 +295,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.ui.tab = next.to_string();
         }
     }
+    let collapsed = app.ui.ribbon_collapsed;
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
@@ -316,7 +317,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     let editing = crate::widgets::icon_text_button_width(ui, editing_label, regular(12.0), true, labels);
                     let comment = crate::widgets::icon_text_button_width(ui, comments, regular(12.0), false, labels);
                     // The gaps (6 + 4 + 8) and the strip's margin.
-                    spaced(share_button) + spaced(editing) + spaced(comment) + 18.0 + 12.0
+                    spaced(share_button) + spaced(editing) + spaced(comment) + 18.0 + 12.0 + if collapsed { 24.0 } else { 0.0 }
                 };
                 let button_levels = [button_widths(0), button_widths(1), button_widths(2)];
                 let labels: Vec<&str> = tabs.iter().map(|(tab, custom)| if *custom { tab.as_str() } else { tl!(tab) }).collect();
@@ -332,6 +333,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     .collect();
                 let plan = plan_strip(&specs, button_levels, ui.available_width(), MORE_TABS_W + 2.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if collapsed {
+                        let (_, rect) = ui.allocate_space(vec2(22.0, 22.0));
+                        ribbon_toggle(app, ui, rect);
+                    }
                     // No document open (#1129): nothing to share, edit or comment on.
                     if !app.has_document() {
                         ui.disable();
@@ -469,7 +474,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             });
         });
-    if app.ui.ribbon_collapsed {
+    if collapsed {
         return;
     }
     egui::Panel::top("ribbon")
@@ -478,6 +483,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            let rect = ui.max_rect();
+            ribbon_toggle(app, ui, Rect::from_min_size(rect.right_bottom() - vec2(22.0, 22.0), vec2(22.0, 22.0)));
+            // Keep groups, launchers and overflow arrows out of the toggle's gutter.
+            let mut content = ui.new_child(
+                egui::UiBuilder::new().max_rect(Rect::from_min_max(rect.min, pos2((rect.right() - 24.0).max(rect.left()), rect.bottom()))),
+            );
+            let ui = &mut content;
             // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
             // the buttons drawn over it keep their own clicks.
             // No document open (#1129): every command is greyed out but Help's.
@@ -551,6 +563,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 state.store(ui.ctx(), scroll.id);
             }
         });
+}
+
+/// The ribbon's persistent toggle: bottom-right when expanded, on the tab strip when collapsed.
+fn ribbon_toggle(app: &mut WordApp, ui: &mut Ui, rect: Rect) {
+    let label = tl!(if app.ui.ribbon_collapsed { "Expand ribbon" } else { "Collapse ribbon" });
+    let response = ui.interact(rect, egui::Id::new("ribbon_toggle"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    let style = crate::widgets::drawn_state(ui, &response, false);
+    ui.painter().rect_filled(rect, 4.0, style.fill);
+    let icon = if app.ui.ribbon_collapsed { "chevronDown" } else { "chevronUp" };
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, style.text, style.text);
+    if response.on_hover_text(label).clicked() {
+        let _ = app.run("ui.collapseRibbon", json!({}));
+    }
 }
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
@@ -2923,6 +2949,44 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
 mod tests {
     use super::*;
     use wordcraft_engine::Session;
+
+    /// The chevron stays reachable in both states, including narrow windows and an empty editor.
+    #[test]
+    fn ribbon_chevron_collapses_and_expands_without_overlapping_controls() {
+        use egui_kittest::kittest::Queryable;
+        for width in [300.0, 1280.0] {
+            for empty in [false, true] {
+                let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+                if empty {
+                    app.run("file.close", json!({})).unwrap();
+                }
+                let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 600.0)).build_ui_state(
+                    |ui, app: &mut WordApp| {
+                        app.logic(ui.ctx());
+                        app.ui(ui);
+                    },
+                    app,
+                );
+                h.run_steps(3);
+                let up = h.get_by_label("Collapse ribbon").rect();
+                assert!(up.right() <= width && up.left() >= width - 50.0, "{width}: {up:?}");
+                h.get_by_label("Collapse ribbon").click();
+                h.run_steps(3);
+                assert!(h.state().ui.ribbon_collapsed);
+                let down = h.get_by_label("Expand ribbon").rect();
+                assert!(down.right() <= width && down.bottom() < up.top(), "{width}: {down:?} {up:?}");
+                for label in ["File", "Home", "Comments", "Editing", "Share"] {
+                    if let Some(node) = h.query_by_label(label) {
+                        assert!(!node.rect().intersects(down), "{width}: {label} overlaps {down:?}");
+                    }
+                }
+                h.get_by_label("Expand ribbon").click();
+                h.run_steps(3);
+                assert!(!h.state().ui.ribbon_collapsed);
+                assert!(h.query_by_label("Collapse ribbon").is_some());
+            }
+        }
+    }
 
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
     #[test]
