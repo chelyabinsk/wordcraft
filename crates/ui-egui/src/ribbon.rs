@@ -296,8 +296,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
     }
     let collapsed = app.ui.ribbon_collapsed;
+    let preview = collapsed && app.ribbon_preview;
     // Tab strip.
-    egui::Panel::top("tabs")
+    let tabs = egui::Panel::top("tabs")
         .exact_size(30.0)
         .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
@@ -333,7 +334,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     .collect();
                 let plan = plan_strip(&specs, button_levels, ui.available_width(), MORE_TABS_W + 2.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if collapsed {
+                    if collapsed && !preview {
                         let (_, rect) = ui.allocate_space(vec2(22.0, 22.0));
                         ribbon_toggle(app, ui, rect);
                     }
@@ -474,95 +475,120 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             });
         });
-    if collapsed {
+    if collapsed && !preview {
         return;
     }
-    egui::Panel::top("ribbon")
-        .exact_size(CONTENT_H + LABEL_H + 10.0)
-        .frame(
-            egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
-        )
-        .show(ui, |ui| {
-            let rect = ui.max_rect();
-            ribbon_toggle(app, ui, Rect::from_min_size(rect.right_bottom() - vec2(22.0, 22.0), vec2(22.0, 22.0)));
-            // Keep groups, launchers and overflow arrows out of the toggle's gutter.
-            let mut content = ui.new_child(
-                egui::UiBuilder::new().max_rect(Rect::from_min_max(rect.min, pos2((rect.right() - 24.0).max(rect.left()), rect.bottom()))),
-            );
-            let ui = &mut content;
-            // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
-            // the buttons drawn over it keep their own clicks.
-            // No document open (#1129): every command is greyed out but Help's.
-            if !app.has_document() && app.ui.tab != "Help" {
-                ui.disable();
-            }
-            let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
-            bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
-            let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
-            crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
-            let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                    match entry {
-                        // Every tab hidden: nothing to show.
-                        Some(e) if e.hidden => return,
-                        Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
-                        _ => {}
-                    }
-                    match app.ui.tab.as_str() {
-                        "Home" => home(app, ui),
-                        "Insert" => insert(app, ui),
-                        "Draw" => draw(app, ui),
-                        "Design" => design(app, ui),
-                        "Layout" => layout(app, ui),
-                        "References" => references(app, ui),
-                        "Mailings" => mailings(app, ui),
-                        "Review" => review(app, ui),
-                        "View" => view(app, ui),
-                        "Developer" => developer(app, ui),
-                        "Zotero" => zotero(app, ui),
-                        "Help" => help(app, ui),
-                        "Table Design" => table_design(app, ui),
-                        "Table Layout" => table_layout(app, ui),
-                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
-                        "Picture Format" => picture_format(app, ui),
-                        "Shape Format" => shape_format(app, ui),
-                        "SmartArt Design" => smart_art_design(app, ui),
-                        "Outlining" => outlining(app, ui),
-                        "Chart Design" => chart_design(app, ui),
-                        _ => home(app, ui),
-                    }
-                    if let Some(e) = entry {
-                        custom_groups(app, ui, &e.groups);
-                    }
-                });
+    let frame =
+        egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border));
+    let child_open = egui::Popup::is_any_open(ui.ctx());
+    let content = |ui: &mut Ui| {
+        let rect = ui.max_rect();
+        ribbon_toggle(app, ui, Rect::from_min_size(rect.right_bottom() - vec2(22.0, 22.0), vec2(22.0, 22.0)));
+        // Keep groups, launchers and overflow arrows out of the toggle's gutter.
+        let mut content =
+            ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(rect.min, pos2((rect.right() - 24.0).max(rect.left()), rect.bottom()))));
+        let ui = &mut content;
+        // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
+        // the buttons drawn over it keep their own clicks.
+        // No document open (#1129): every command is greyed out but Help's.
+        if !app.has_document() && app.ui.tab != "Help" {
+            ui.disable();
+        }
+        let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
+        bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+        let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
+        crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
+        let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                match entry {
+                    // Every tab hidden: nothing to show.
+                    Some(e) if e.hidden => return,
+                    Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
+                    _ => {}
+                }
+                match app.ui.tab.as_str() {
+                    "Home" => home(app, ui),
+                    "Insert" => insert(app, ui),
+                    "Draw" => draw(app, ui),
+                    "Design" => design(app, ui),
+                    "Layout" => layout(app, ui),
+                    "References" => references(app, ui),
+                    "Mailings" => mailings(app, ui),
+                    "Review" => review(app, ui),
+                    "View" => view(app, ui),
+                    "Developer" => developer(app, ui),
+                    "Zotero" => zotero(app, ui),
+                    "Help" => help(app, ui),
+                    "Table Design" => table_design(app, ui),
+                    "Table Layout" => table_layout(app, ui),
+                    "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
+                    "Picture Format" => picture_format(app, ui),
+                    "Shape Format" => shape_format(app, ui),
+                    "SmartArt Design" => smart_art_design(app, ui),
+                    "Outlining" => outlining(app, ui),
+                    "Chart Design" => chart_design(app, ui),
+                    _ => home(app, ui),
+                }
+                if let Some(e) = entry {
+                    custom_groups(app, ui, &e.groups);
+                }
             });
-            crate::ribbon_fit::end(ui.ctx());
-            // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
-            // where more is and scroll it on click. Every command also stays reachable through Search Commands.
-            let r = scroll.inner_rect;
-            let overflow = scroll.content_size.x - r.width();
-            let offset = scroll.state.offset.x;
-            let step = 160.0;
-            let mut next = None;
-            if offset > 1.0 {
-                let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
-                if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
-                    next = Some(offset - step);
-                }
-            }
-            if overflow - offset > 1.0 {
-                let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
-                if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
-                    next = Some(offset + step);
-                }
-            }
-            if let Some(x) = next {
-                let mut state = scroll.state;
-                state.offset.x = x.clamp(0.0, overflow.max(0.0));
-                state.store(ui.ctx(), scroll.id);
-            }
         });
+        crate::ribbon_fit::end(ui.ctx());
+        // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
+        // where more is and scroll it on click. Every command also stays reachable through Search Commands.
+        let r = scroll.inner_rect;
+        let overflow = scroll.content_size.x - r.width();
+        let offset = scroll.state.offset.x;
+        let step = 160.0;
+        let mut next = None;
+        if offset > 1.0 {
+            let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
+            if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
+                next = Some(offset - step);
+            }
+        }
+        if overflow - offset > 1.0 {
+            let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
+            if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
+                next = Some(offset + step);
+            }
+        }
+        if let Some(x) = next {
+            let mut state = scroll.state;
+            state.offset.x = x.clamp(0.0, overflow.max(0.0));
+            state.store(ui.ctx(), scroll.id);
+        }
+    };
+    let panel = egui::Panel::top("ribbon").exact_size(CONTENT_H + LABEL_H + 10.0).frame(frame);
+    if preview {
+        egui::Area::new(egui::Id::new("ribbon_preview")).order(egui::Order::Foreground).fixed_pos(tabs.response.rect.left_bottom()).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(tabs.response.rect.width());
+                ui.set_height(CONTENT_H + LABEL_H + 10.0);
+                panel.show(ui, content);
+            },
+        );
+        // Lists and collapsed groups own Escape before the temporary ribbon does.
+        let child_open = child_open || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
+        app.escape_free = false;
+        let outside = ui.input(|i| i.pointer.any_click())
+            && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| {
+                !tabs.response.rect.contains(p)
+                    && !ui.ctx().layer_id_at(p).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
+            });
+        let escape = !child_open && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if outside || escape {
+            app.ribbon_preview = false;
+            if escape {
+                app.canvas.want_focus = true;
+            }
+        }
+    } else {
+        panel.show(ui, content);
+    }
 }
 
 /// The ribbon's persistent toggle: bottom-right when expanded, on the tab strip when collapsed.
@@ -2986,6 +3012,60 @@ mod tests {
                 assert!(h.query_by_label("Collapse ribbon").is_some());
             }
         }
+    }
+
+    /// Desktop Word: a collapsed tab opens over the page, dismisses after use, and can be pinned.
+    #[test]
+    fn collapsed_ribbon_temporarily_reveals_tabs_without_moving_the_page() {
+        use egui_kittest::kittest::Queryable;
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 600.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label("Collapse ribbon").click();
+        h.run_steps(3);
+        let page = h.state().canvas.canvas_rect;
+        h.get_by_label("Home").click();
+        h.run_steps(4);
+        assert!(h.state().ribbon_preview && h.state().ui.ribbon_collapsed);
+        assert_eq!(h.state().canvas.canvas_rect, page, "the temporary ribbon overlays the page");
+        h.get_by_label("Change Case").click();
+        h.run_steps(3);
+        assert!(h.state().ribbon_preview && egui::Popup::is_any_open(&h.ctx));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().ribbon_preview, "Escape dismisses the dropdown before the ribbon");
+        h.get_by_label("Bold").click();
+        h.run_steps(3);
+        assert!(!h.state().ribbon_preview && h.state().ui.ribbon_collapsed);
+        h.event(egui::Event::Text("!".into()));
+        h.run_steps(3);
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('!'), "typing returns to the page");
+        h.get_by_label("Insert").click();
+        h.run_steps(4);
+        assert!(h.state().ribbon_preview);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().ribbon_preview && h.state().ui.ribbon_collapsed);
+        h.get_by_label("Home").click();
+        h.run_steps(4);
+        let pos = h.state().canvas.canvas_rect.unwrap().center();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.run_steps(1);
+        }
+        h.run_steps(3);
+        assert!(!h.state().ribbon_preview && h.state().ui.ribbon_collapsed);
+        h.get_by_label("Home").click();
+        h.run_steps(4);
+        h.get_by_label("Expand ribbon").click();
+        h.run_steps(3);
+        assert!(!h.state().ribbon_preview && !h.state().ui.ribbon_collapsed);
     }
 
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).

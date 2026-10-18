@@ -498,6 +498,8 @@ fn migrate_units(v: &mut Value) {
 pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
+    /// A collapsed ribbon temporarily opened by selecting a tab; never persisted.
+    ribbon_preview: bool,
     pub services: Services,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
@@ -672,6 +674,7 @@ impl WordApp {
             synthetic: Vec::new(),
             control_click: false,
             keytip_rects: Vec::new(),
+            ribbon_preview: false,
             nav_search_focus: false,
             styled: false,
             fonts_hans: false,
@@ -844,6 +847,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.ribbon_preview && !matches!(id, "ui.tab" | "ui.collapseRibbon") {
+            self.ribbon_preview = false;
+            self.canvas.want_focus = true;
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -1459,6 +1466,7 @@ impl WordApp {
         Some(Ok(match id {
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
+                self.ribbon_preview = self.ui.ribbon_collapsed && tab != "File";
                 if tab == "File" {
                     self.ui.backstage = true;
                 } else {
@@ -1520,6 +1528,7 @@ impl WordApp {
             }
             "ui.collapseRibbon" => {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
+                self.ribbon_preview = false;
                 json!({"collapsed": self.ui.ribbon_collapsed})
             }
             "ui.quickAccessToolbar" => {
