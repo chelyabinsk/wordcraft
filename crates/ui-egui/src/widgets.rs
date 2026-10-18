@@ -218,6 +218,11 @@ pub(crate) fn single_line(ui: &Ui) -> bool {
     ui.stack().iter().find_map(|s| s.tags().get_downcast::<bool>("single_line_ribbon").copied()).unwrap_or(false)
 }
 
+/// Whether a completed button command should dismiss its enclosing editable group popup.
+fn in_group_popup(ui: &Ui) -> bool {
+    ui.stack().iter().any(|s| s.tags().contains("ribbon_group_popup"))
+}
+
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
     big_button(ui, app, icon, label, id, params, menu, false)
@@ -274,6 +279,9 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     command_menu(&resp, app, id);
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
+        if in_group_popup(ui) {
+            ui.close();
+        }
     }
     resp
 }
@@ -299,6 +307,9 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     command_menu(&resp, app, id);
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
+        if in_group_popup(ui) {
+            ui.close();
+        }
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
     resp
@@ -336,6 +347,9 @@ pub fn split(
     command_menu(&resp, app, id);
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
+        if in_group_popup(ui) {
+            ui.close();
+        }
     }
     let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
@@ -363,6 +377,21 @@ pub fn menu_button(
     tip: &str,
     big_btn: bool,
     id: &str,
+    menu: impl FnOnce(&mut Ui, &mut WordApp),
+) {
+    menu_button_with_behavior(ui, app, icon, label, tip, big_btn, id, egui::PopupCloseBehavior::CloseOnClick, menu);
+}
+
+/// Keep editable group popups open on inside clicks while ordinary command menus retain their behavior.
+fn menu_button_with_behavior(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    label: Option<&str>,
+    tip: &str,
+    big_btn: bool,
+    id: &str,
+    close_behavior: egui::PopupCloseBehavior,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
     let big_btn = big_btn && !single_line(ui);
@@ -410,7 +439,7 @@ pub fn menu_button(
     if !on {
         return;
     }
-    egui::Popup::menu(&resp).show(|ui| {
+    egui::Popup::menu(&resp).close_behavior(close_behavior).show(|ui| {
         ui.set_min_width(200.0);
         menu(ui, app);
     });
@@ -448,9 +477,21 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
             || (app.ui.tab == "Layout" && id_title == "Paragraph")
             || (app.ui.tab == "Table Layout" && matches!(id_title, "Cell Size" | "Data"))
         {
-            menu_button(ui, app, group_icon(id_title), None, title, false, "", |ui, app| {
-                ui.horizontal_top(|ui| controls(ui, app));
-            });
+            menu_button_with_behavior(
+                ui,
+                app,
+                group_icon(id_title),
+                None,
+                title,
+                false,
+                "",
+                egui::PopupCloseBehavior::CloseOnClickOutside,
+                |ui, app| {
+                    ui.scope_builder(egui::UiBuilder::new().ui_stack_info(egui::UiStackInfo::default().with_tag("ribbon_group_popup")), |ui| {
+                        ui.horizontal_top(|ui| controls(ui, app));
+                    });
+                },
+            );
         } else {
             let row = ui.horizontal_centered(|ui| controls(ui, app));
             #[cfg(test)]
@@ -1344,10 +1385,9 @@ mod tests {
         assert!(h <= LABEL_LINE_H, "label line is {h} px tall");
     }
 
-    /// #1945: a ribbon button's right-click menu offers Show Quick Access Toolbar only while the
-    /// toolbar is hidden, and it brings the toolbar back.
+    /// Ribbon context actions toggle layout without editing the document and restore a hidden QAT.
     #[test]
-    fn ribbon_menu_offers_show_quick_access_toolbar_only_while_hidden() {
+    fn ribbon_menu_toggles_layout_and_restores_quick_access_toolbar() {
         use egui_kittest::kittest::Queryable;
         let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
@@ -1384,6 +1424,61 @@ mod tests {
         h.run_steps(2);
         assert!(h.state().ui.quick_access_toolbar, "Show Quick Access Toolbar brings it back");
         assert!(h.query_by_label("Show Quick Access Toolbar").is_none(), "and closes the menu");
+        let selection = h.state().session.sel.clone();
+        let revision = h.state().session.rev();
+        for expected in [true, false] {
+            let at = ribbon_bold(&h);
+            right_click(&mut h, at);
+            h.get_by_label("Single-line ribbon").click();
+            h.run_steps(3);
+            assert_eq!(h.state().ui.single_line_ribbon, expected);
+            assert_eq!(h.state().session.sel, selection);
+            assert_eq!(h.state().session.rev(), revision, "changing layout does not edit the document");
+            assert!(!egui::Popup::is_any_open(&h.ctx));
+        }
+    }
+
+    /// Editable group fields survive their first click and apply text input to the document.
+    #[test]
+    fn single_line_group_popups_keep_fields_open_until_a_command_completes() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        for (tab, group, table) in [("Layout", "Paragraph", false), ("Table Layout", "Cell Size", true)] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+            if table {
+                app.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
+            }
+            app.run("ui.singleLineRibbon", serde_json::json!({"value": true})).unwrap();
+            app.run("ui.tab", serde_json::json!({"tab": tab})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    app.logic(ui.ctx());
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(4);
+            h.get_by_label(group).click();
+            h.run_steps(3);
+            h.get_all_by_role(Role::SpinButton).next().unwrap().click();
+            h.run_steps(3);
+            assert!(egui::Popup::is_any_open(&h.ctx), "{group}: clicking a field keeps it open");
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.event(egui::Event::Text("1".into()));
+            h.key_press(egui::Key::Enter);
+            h.run_steps(3);
+            let session = &h.state().session;
+            let actual = if table {
+                let (path, row, _) = session.sel.focus.path.cell().unwrap();
+                session.doc.table(session.sel.focus.story, &path).unwrap().rows.get(row).unwrap().props.height.unwrap()
+            } else {
+                session.doc.para_at(&session.sel.focus).unwrap().props.indent_left.unwrap()
+            };
+            assert!((actual - crate::options::unit().pt_per_unit()).abs() < 0.1, "{group}: {actual}");
+            h.get_by_label(if table { "Distribute Rows" } else { "Paragraph settings" }).click();
+            h.run_steps(3);
+            assert!(!egui::Popup::is_any_open(&h.ctx), "completed commands dismiss their group popup");
+        }
     }
 
     fn hint_ctx() -> egui::Context {
