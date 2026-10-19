@@ -75,10 +75,7 @@ impl DesktopTheme {
         let worker_state = state.clone();
         let started = std::thread::Builder::new().name("wordcraft-desktop-theme".into()).spawn(move || {
             let mut last = None;
-            loop {
-                if watch(&connect, &worker_state, &mut last, &tx, &changed).is_ok() {
-                    return;
-                }
+            while watch(&connect, &worker_state, &mut last, &tx, &changed).is_err() {
                 // Disconnection wakes this wait too, so dropping the watcher never waits for RETRY.
                 if stopped.recv_timeout(retry) != Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
                     return;
@@ -152,26 +149,21 @@ fn watch(
     }
     let messages = MessageIterator::from(&connection);
     let dbus = zbus::blocking::fdo::DBusProxy::new(&connection)?;
-    dbus.add_match_rule(
-        MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender(PORTAL)?
-            .path("/org/freedesktop/portal/desktop")?
-            .interface(SETTINGS)?
-            .member("SettingChanged")?
-            .arg(1, "color-scheme")?
-            .build(),
-    )?;
-    dbus.add_match_rule(
-        MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender("org.freedesktop.DBus")?
-            .path("/org/freedesktop/DBus")?
-            .interface("org.freedesktop.DBus")?
-            .member("NameOwnerChanged")?
-            .arg(0, PORTAL)?
-            .build(),
-    )?;
+    for (sender, path, interface, member, arg_index, arg_value) in [
+        (PORTAL, "/org/freedesktop/portal/desktop", SETTINGS, "SettingChanged", 1, "color-scheme"),
+        ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameOwnerChanged", 0, PORTAL),
+    ] {
+        dbus.add_match_rule(
+            MatchRule::builder()
+                .msg_type(Type::Signal)
+                .sender(sender)?
+                .path(path)?
+                .interface(interface)?
+                .member(member)?
+                .arg(arg_index, arg_value)?
+                .build(),
+        )?;
+    }
     let mut report = || {
         let mut bus = Bus(Some(connection.clone()));
         let answer = read(&mut bus);
