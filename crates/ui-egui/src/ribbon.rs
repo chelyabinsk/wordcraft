@@ -1697,6 +1697,7 @@ fn columns_items(ui: &mut Ui, app: &mut WordApp) {
     mi(ui, app, "More Columns…", "ui.dialog", json!({"name": "columns"}));
 }
 
+/// Page setup, paragraph indentation and spacing, and object arrangement on the Layout tab.
 fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Page Setup", Some("layout.pageSetup"), app, |ui, app| {
         // Text Direction works on what the caret is in: table cells, a text box, else the section.
@@ -1771,22 +1772,42 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
             ui.label(egui::RichText::new(tl!("Left:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            let left = ui.add_sized(
+                FIELD,
+                egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2).update_while_editing(false),
+            );
+            let cancelled = esc_cancelled(ui, &left, egui::Id::new(("layout_para_field", "left")));
+            if left.changed() && l != rp.indent_left / k && !cancelled {
                 let _ = app.run("para.indents", json!({"left": l * k}));
             }
             spaced(ui, egui::RichText::new(tl!("Before:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            let before = ui.add_sized(
+                FIELD,
+                egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))).update_while_editing(false),
+            );
+            let cancelled = esc_cancelled(ui, &before, egui::Id::new(("layout_para_field", "before")));
+            if before.changed() && b != rp.space_before && !cancelled {
                 let _ = app.run("para.spacing", json!({"before": b}));
             }
             ui.end_row();
             let mut r = rp.indent_right / k;
             let mut a = rp.space_after;
             ui.label(egui::RichText::new(tl!("Right:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            let right = ui.add_sized(
+                FIELD,
+                egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2).update_while_editing(false),
+            );
+            let cancelled = esc_cancelled(ui, &right, egui::Id::new(("layout_para_field", "right")));
+            if right.changed() && r != rp.indent_right / k && !cancelled {
                 let _ = app.run("para.indents", json!({"right": r * k}));
             }
             spaced(ui, egui::RichText::new(tl!("After:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            let after = ui.add_sized(
+                FIELD,
+                egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))).update_while_editing(false),
+            );
+            let cancelled = esc_cancelled(ui, &after, egui::Id::new(("layout_para_field", "after")));
+            if after.changed() && a != rp.space_after && !cancelled {
                 let _ = app.run("para.spacing", json!({"after": a}));
             }
             ui.end_row();
@@ -3094,14 +3115,35 @@ mod tests {
         assert!(h.state().ui.ribbon_collapsed && !h.state().ribbon_preview);
         h.get_by_label("Layout").click();
         h.run_steps(4);
-        h.get_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().click();
-        h.run_steps(3);
-        h.key_press(egui::Key::Escape);
-        h.run_steps(3);
-        assert!(h.state().ribbon_preview, "Escape cancels the field before dismissing the ribbon");
+        let revision = h.state().session.rev();
+        let indent = h.state().session.doc.para_at(&h.state().session.sel.focus).unwrap().props.indent_left;
+        for field in 0..4 {
+            h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(field).unwrap().click();
+            h.run_steps(3);
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.event(egui::Event::Text("5".into()));
+            h.run_steps(3);
+            assert_eq!(h.state().session.rev(), revision, "typing waits for a committed value");
+            h.key_press(egui::Key::Escape);
+            h.run_steps(3);
+            assert!(h.state().ribbon_preview, "Escape cancels the field before dismissing the ribbon");
+            assert_eq!(h.state().session.rev(), revision, "Escape does not change the document");
+            assert_eq!(h.state().session.doc.para_at(&h.state().session.sel.focus).unwrap().props.indent_left, indent);
+        }
         h.key_press(egui::Key::Escape);
         h.run_steps(3);
         assert!(!h.state().ribbon_preview, "the next Escape dismisses the ribbon");
+        h.get_by_label("Layout").click();
+        h.run_steps(4);
+        h.get_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().click();
+        h.run_steps(3);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("1".into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        let indent = h.state().session.doc.para_at(&h.state().session.sel.focus).unwrap().props.indent_left.unwrap();
+        assert!((indent - crate::options::unit().pt_per_unit()).abs() < 0.1, "Enter applies the indentation");
+        assert!(!h.state().ribbon_preview, "committing the command dismisses the preview");
     }
 
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
