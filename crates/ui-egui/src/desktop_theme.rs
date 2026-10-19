@@ -75,10 +75,7 @@ impl DesktopTheme {
         let worker_state = state.clone();
         let started = std::thread::Builder::new().name("wordcraft-desktop-theme".into()).spawn(move || {
             let mut last = None;
-            loop {
-                if watch(&connect, &worker_state, &mut last, &tx, &changed).is_ok() {
-                    return;
-                }
+            while watch(&connect, &worker_state, &mut last, &tx, &changed).is_err() {
                 // Disconnection wakes this wait too, so dropping the watcher never waits for RETRY.
                 if stopped.recv_timeout(retry) != Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
                     return;
@@ -152,26 +149,21 @@ fn watch(
     }
     let messages = MessageIterator::from(&connection);
     let dbus = zbus::blocking::fdo::DBusProxy::new(&connection)?;
-    dbus.add_match_rule(
-        MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender(PORTAL)?
-            .path("/org/freedesktop/portal/desktop")?
-            .interface(SETTINGS)?
-            .member("SettingChanged")?
-            .arg(1, "color-scheme")?
-            .build(),
-    )?;
-    dbus.add_match_rule(
-        MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender("org.freedesktop.DBus")?
-            .path("/org/freedesktop/DBus")?
-            .interface("org.freedesktop.DBus")?
-            .member("NameOwnerChanged")?
-            .arg(0, PORTAL)?
-            .build(),
-    )?;
+    for (sender, path, interface, member, arg_index, arg_value) in [
+        (PORTAL, "/org/freedesktop/portal/desktop", SETTINGS, "SettingChanged", 1, "color-scheme"),
+        ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameOwnerChanged", 0, PORTAL),
+    ] {
+        dbus.add_match_rule(
+            MatchRule::builder()
+                .msg_type(Type::Signal)
+                .sender(sender)?
+                .path(path)?
+                .interface(interface)?
+                .member(member)?
+                .arg(arg_index, arg_value)?
+                .build(),
+        )?;
+    }
     let mut report = || {
         let mut bus = Bus(Some(connection.clone()));
         let answer = read(&mut bus);
@@ -259,21 +251,32 @@ fn read(bus: &mut Bus) -> Option<bool> {
     let connection = bus.0.as_ref()?;
     let mut failed = false;
     for schema in SCHEMAS {
-        let reply =
-            match connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, "color-scheme")) {
-                Ok(reply) => reply,
-                Err(zbus::Error::MethodError(name, _, _))
-                    if matches!(name.as_str(), "org.freedesktop.portal.Error.NotFound" | "org.freedesktop.DBus.Error.ServiceUnknown") =>
-                {
-                    continue;
+        let reply = match connection
+            .call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, "color-scheme"))
+            .or_else(|error| match error {
+                zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.DBus.Error.UnknownMethod" => {
+                    connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "Read", &(schema, "color-scheme"))
                 }
-                Err(_) => {
-                    failed = true;
-                    continue;
-                }
-            };
+                error => Err(error),
+            }) {
+            Ok(reply) => reply,
+            Err(zbus::Error::MethodError(name, _, _))
+                if matches!(name.as_str(), "org.freedesktop.portal.Error.NotFound" | "org.freedesktop.DBus.Error.ServiceUnknown") =>
+            {
+                continue;
+            }
+            Err(_) => {
+                failed = true;
+                continue;
+            }
+        };
         let Ok((answer,)) = reply.body().deserialize::<(zbus::zvariant::OwnedValue,)>() else { continue };
-        if let Some(dark) = parse(&answer) {
+        // Settings v1's deprecated Read wraps its answer in an additional variant.
+        let answer = match &*answer {
+            zbus::zvariant::Value::Value(inner) => inner.as_ref(),
+            answer => answer,
+        };
+        if let Some(dark) = parse(answer) {
             return Some(dark);
         }
     }

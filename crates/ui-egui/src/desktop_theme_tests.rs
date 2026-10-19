@@ -218,3 +218,51 @@ fn permanent_errors_keep_the_bus_but_transient_failures_clear_it() {
     assert_eq!(read(&mut reader), None);
     assert!(reader.0.is_none(), "a missing legacy key must not hide a transient failure");
 }
+
+/// Settings v1 has only Read, whose reply contains an extra variant layer.
+struct LegacyPortal(Arc<Mutex<Setting>>);
+
+#[zbus::interface(name = "org.freedesktop.portal.Settings")]
+impl LegacyPortal {
+    fn read(&self, namespace: &str, key: &str) -> Result<zbus::zvariant::OwnedValue, PortalError> {
+        let mut setting = self.0.lock().unwrap();
+        setting.reads += 1;
+        if namespace != SCHEMAS[0] || key != "color-scheme" {
+            return Err(PortalError::NotFound(key.into()));
+        }
+        Ok(zbus::zvariant::Value::Value(Box::new(zbus::zvariant::Value::from(if setting.dark { 1_u32 } else { 2_u32 }))).try_into().unwrap())
+    }
+}
+
+/// A v1 portal supplies both the initial theme and live updates without reconnecting.
+#[test]
+fn read_only_portal_updates_the_theme_without_reconnecting() {
+    let bus = PrivateBus::start(None);
+    let setting = Arc::new(Mutex::new(Setting { dark: true, ..Default::default() }));
+    let service = zbus::blocking::connection::Builder::address(bus.1.as_str())
+        .unwrap()
+        .serve_at("/org/freedesktop/portal/desktop", LegacyPortal(setting.clone()))
+        .unwrap()
+        .name(PORTAL)
+        .unwrap()
+        .build()
+        .unwrap();
+    let address = bus.1.clone();
+    let (connected, connections) = channel();
+    let watcher = DesktopTheme::start_with(
+        || {},
+        move || {
+            connected.send(()).unwrap();
+            zbus::blocking::connection::Builder::address(address.as_str())?.build()
+        },
+        Duration::from_millis(20),
+    );
+    let changes = watcher.changes.as_ref().unwrap();
+    assert_eq!(changes.recv_timeout(Duration::from_secs(3)).unwrap(), Some(true));
+    connections.recv_timeout(Duration::from_secs(3)).unwrap();
+    setting.lock().unwrap().dark = false;
+    emit(&service, SCHEMAS[0], "color-scheme");
+    assert_eq!(changes.recv_timeout(Duration::from_secs(3)).unwrap(), Some(false));
+    assert_eq!(connections.recv_timeout(Duration::from_millis(100)), Err(std::sync::mpsc::RecvTimeoutError::Timeout));
+    assert_eq!(setting.lock().unwrap().reads, 2, "idle watchers must not reread settings");
+}
