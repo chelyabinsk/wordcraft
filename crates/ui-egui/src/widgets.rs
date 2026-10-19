@@ -223,6 +223,15 @@ fn in_group_popup(ui: &Ui) -> bool {
     ui.stack().iter().any(|s| s.tags().contains("ribbon_group_popup"))
 }
 
+/// Use a submenu inside a single-line group so opening it preserves the parent and closing it propagates.
+pub(crate) fn ribbon_popup(ui: &Ui, response: &Response, content: impl FnOnce(&mut Ui)) {
+    if in_group_popup(ui) {
+        egui::containers::menu::SubMenu::new().config(egui::containers::menu::MenuConfig::new()).show(ui, response, content);
+    } else {
+        egui::Popup::menu(response).show(content);
+    }
+}
+
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
     big_button(ui, app, icon, label, id, params, menu, false)
@@ -439,10 +448,15 @@ fn menu_button_with_behavior(
     if !on {
         return;
     }
-    egui::Popup::menu(&resp).close_behavior(close_behavior).show(|ui| {
+    let content = |ui: &mut Ui| {
         ui.set_min_width(200.0);
         menu(ui, app);
-    });
+    };
+    if close_behavior == egui::PopupCloseBehavior::CloseOnClickOutside {
+        egui::Popup::menu(&resp).close_behavior(close_behavior).show(content);
+    } else {
+        ribbon_popup(ui, &resp, content);
+    }
 }
 
 #[cfg(test)]
@@ -1189,7 +1203,11 @@ fn list_rows<'a>(
     if let (Some(h), Some((offset, view_h))) = (highlight, scroll) {
         let top = h as f32 * (row_h + ui.spacing().item_spacing.y);
         let bottom = top + row_h;
-        let offset = if top < offset || view_h <= 0.0 {
+        let offset = if view_h <= 0.0 {
+            // No list was visible for the previous query. Start at the first row, including
+            // its heading, rather than scrolling to the first selectable entry below it.
+            0.0
+        } else if top < offset {
             top
         } else if bottom > offset + view_h {
             bottom - view_h
@@ -1478,6 +1496,38 @@ mod tests {
             h.get_by_label(if table { "Distribute Rows" } else { "Paragraph settings" }).click();
             h.run_steps(3);
             assert!(!egui::Popup::is_any_open(&h.ctx), "completed commands dismiss their group popup");
+        }
+    }
+
+    /// Nested Equation commands dismiss both their menu and the enclosing single-line group.
+    #[test]
+    fn single_line_equation_commands_close_the_group_popup() {
+        use egui_kittest::kittest::Queryable;
+        for (group, menu, action, property) in [
+            ("Tools", "Convert between built-up and linear form", "Current - Linear", "linearForm"),
+            ("Equation Options", "Justification of a display equation", "Left", "display"),
+        ] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            app.run("insert.equation", serde_json::json!({"linear": "x/2"})).unwrap();
+            app.run("ui.singleLineRibbon", serde_json::json!({"value": true})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    app.logic(ui.ctx());
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(4);
+            h.get_by_label(group).click();
+            h.run_steps(3);
+            h.get_by_label(menu).click();
+            h.run_steps(3);
+            let revision = h.state().session.rev();
+            h.get_by_label(action).click();
+            h.run_steps(3);
+            assert!(h.state().session.rev() > revision, "{action} executes");
+            assert_eq!(h.state_mut().session.run("equation.get", &serde_json::json!({})).unwrap()[property], true);
+            assert!(!egui::Popup::is_any_open(&h.ctx), "{action} closes both popups");
         }
     }
 
@@ -1825,6 +1875,34 @@ mod tests {
             let drawn = out.shapes.iter().any(|c| has_text(&c.shape, row));
             out.drop_without_applying_deltas();
             assert!(drawn, "keystroke {n}: {row} is drawn");
+        }
+    }
+
+    /// Clearing a query with no matches must reveal the recent section, even before the list
+    /// has ever had a visible viewport. A matching query is the control for a measured viewport.
+    #[test]
+    fn clearing_a_font_query_keeps_the_recent_heading_visible() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{By, Queryable};
+        for query in ["a", "x"] {
+            // A short list clamps the bad offset to zero and would hide this regression.
+            let fonts: Vec<String> = (0..24).map(|n| format!("Family {n:02}")).collect();
+            let recent: Vec<String> = ["Georgia", "Courier New"].map(String::from).to_vec();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui(move |ui| {
+                font_combo_with_recent(ui, "recent_ci_reduced", 150.0, "", &fonts, &recent, None);
+            });
+            h.run_steps(2);
+            h.get(By::new().role(Role::TextInput)).focus();
+            h.step();
+            h.event(egui::Event::Text(query.into()));
+            h.run_steps(2);
+            assert!(h.query(By::new().role(Role::TextInput).value(query)).is_some());
+            assert!(h.query_by_label("Recently Used Fonts").is_none());
+            h.key_press(egui::Key::Backspace);
+            h.run_steps(2);
+            assert!(h.query(By::new().role(Role::TextInput).value("")).is_some());
+            assert!(h.query_by_label("Recently Used Fonts").is_some(), "cleared query {query:?}");
+            assert!(h.query_by_label("All Fonts").is_some());
         }
     }
 

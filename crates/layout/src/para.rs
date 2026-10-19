@@ -156,6 +156,9 @@ pub struct Line {
     pub top: f32,
     pub height: f32,
     pub baseline: f32,
+    /// The text's own ascent and descent on this line, without line-spacing leading (the caret's extent).
+    pub text_asc: f32,
+    pub text_desc: f32,
     /// Cluster index range.
     pub c0: usize,
     pub c1: usize,
@@ -1717,6 +1720,22 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             found.push(i);
         }
     }
+    // UAX #14 (LB13) also forbids a break between a space and a slash, so with the break after the
+    // slash gone as well, "caption /word" had no break at all and the word split mid-letter. Word
+    // wraps "/word" whole to the next line: break before a slash that starts a word.
+    let before_slash: Vec<usize> = text
+        .match_indices('/')
+        .filter(|&(i, _)| {
+            text.get(..i).and_then(|t| t.chars().next_back()).is_some_and(|c| c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}'))
+                && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if !before_slash.is_empty() {
+        found.extend(before_slash);
+        found.sort_unstable();
+        found.dedup();
+    }
     // Myanmar has no spaces between words: it wraps between syllables.
     if text.chars().any(|c| matches!(u32::from(c), 0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F)) {
         found.extend(wordcraft_doc::cluster::myanmar_breaks(&text));
@@ -2296,6 +2315,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             desc = st.descent;
         }
         let text_natural = asc + desc;
+        let (text_asc, text_desc) = (asc.max(obj_asc), desc);
         let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         let mut label_extra = 0.0;
         if first && let Some(lab) = &pl.label {
@@ -2420,6 +2440,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             top,
             height,
             baseline,
+            text_asc,
+            text_desc,
             c0,
             c1,
             xs,
@@ -2466,6 +2488,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     top,
                     height: h,
                     baseline: top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
+                    text_asc: asc,
+                    text_desc: desc,
                     c0: n,
                     c1: n,
                     xs: vec![x0],
@@ -2940,10 +2964,10 @@ impl ParaLayout {
         }
         best
     }
-    /// Line ascent/descent of the paragraph mark (for empty paragraphs and caret height).
+    /// The caret's ascent/descent on a line: the text's own, without line-spacing leading, kept inside the line box.
     pub fn caret_metrics(&self, li: usize) -> (f32, f32) {
         let Some(l) = self.lines.get(li) else { return (10.0, 3.0) };
-        (l.baseline - l.top, l.top + l.height - l.baseline)
+        (l.text_asc.min(l.baseline - l.top), l.text_desc.min(l.top + l.height - l.baseline))
     }
 }
 
