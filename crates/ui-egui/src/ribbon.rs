@@ -567,6 +567,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     };
     let panel = egui::Panel::top("ribbon").exact_size(CONTENT_H + LABEL_H + 10.0).frame(frame);
     if preview {
+        let preview_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("ribbon_preview"));
+        // egui clears focus at frame start on Escape, before the field cancels its edit.
+        let field_was_focused = ui.data(|d| d.get_temp::<bool>(preview_layer.id)).unwrap_or(false);
         egui::Area::new(egui::Id::new("ribbon_preview")).order(egui::Order::Foreground).fixed_pos(tabs.response.rect.left_bottom()).show(
             ui.ctx(),
             |ui| {
@@ -575,8 +578,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 panel.show(ui, content);
             },
         );
-        // Lists and collapsed groups own Escape before the temporary ribbon does.
-        let child_open = child_open || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
+        let field_focused = ui.ctx().memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id)).is_some_and(|r| r.layer_id == preview_layer);
+        ui.data_mut(|d| d.insert_temp(preview_layer.id, app.ribbon_preview && field_focused));
+        // Fields, lists and collapsed groups own Escape before the temporary ribbon does.
+        let child_open = child_open || field_was_focused || field_focused || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
         app.escape_free = false;
         let outside = ui.input(|i| i.pointer.any_click())
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| {
@@ -591,6 +596,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
     } else {
+        ui.data_mut(|d| d.remove::<bool>(egui::Id::new("ribbon_preview")));
         panel.show(ui, content);
     }
 }
@@ -3086,6 +3092,16 @@ mod tests {
         h.get_by_label("Collapse ribbon").click();
         h.run_steps(3);
         assert!(h.state().ui.ribbon_collapsed && !h.state().ribbon_preview);
+        h.get_by_label("Layout").click();
+        h.run_steps(4);
+        h.get_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().click();
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().ribbon_preview, "Escape cancels the field before dismissing the ribbon");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().ribbon_preview, "the next Escape dismisses the ribbon");
     }
 
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
