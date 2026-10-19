@@ -591,7 +591,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         );
         let field_focused = ui.ctx().memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id)).is_some_and(|r| r.layer_id == preview_layer);
         ui.data_mut(|d| d.insert_temp(preview_layer.id, app.ribbon_preview && field_focused));
-        let drag_stopped = ui.ctx().drag_stopped_id().and_then(|id| ui.ctx().read_response(id)).is_some_and(|r| r.layer_id == preview_layer);
+        let drag_stopped = ui
+            .ctx()
+            .drag_stopped_id()
+            .and_then(|id| ui.ctx().read_response(id))
+            .is_some_and(|r| r.layer_id == preview_layer && r.sense.senses_click());
         // Fields, lists and collapsed groups own Escape before the temporary ribbon does.
         let child_open = child_open || field_was_focused || field_focused || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
         app.escape_free = false;

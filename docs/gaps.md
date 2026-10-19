@@ -31,7 +31,7 @@ Legacy Word imports (#2445): interactive Save for `.doc`/`.dot` uses the existin
 
 Active footnote and endnote text stays readable while editing (#2545). This fixes a display-context defect; the broader fidelity, accessibility and readiness gates below are unchanged.
 
-A visible ribbon collapse/expand control and temporary tab reveal are now provided; numeric field drags stay open until release; page presses dismiss it before selection drags, allowing typed field edits to commit first. This closes the discoverability gap without changing the estimates below.
+A visible ribbon collapse/expand control and temporary tab reveal are now provided; numeric field drags stay open until release; page presses dismiss it before selection drags, allowing typed field edits to commit first; touch scrolling keeps it open. This closes the discoverability gap without changing the estimates below.
 
 ## Ranked
 
@@ -108,7 +108,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-19 | trivial | Visible ribbon collapse/expand chevron, temporary tab reveal and pin control, using the existing commands; numeric field drags keep the preview open until release, and page presses dismiss it before selection drags, allowing typed field edits to commit first |
+| 2026-10-19 | trivial | Visible ribbon collapse/expand chevron, temporary tab reveal and pin control, using the existing commands; numeric field drags keep the preview open until release, and page presses dismiss it before selection drags, allowing typed field edits to commit first; touch scrolling keeps the preview open |
 | 2026-10-19 | trivial | Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in |
 | 2026-10-19 | trivial | Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
