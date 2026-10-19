@@ -570,6 +570,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let preview_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("ribbon_preview"));
         // egui clears focus at frame start on Escape, before the field cancels its edit.
         let field_was_focused = ui.data(|d| d.get_temp::<bool>(preview_layer.id)).unwrap_or(false);
+        let outside = ui.input(|i| i.pointer.any_pressed())
+            && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
+                !tabs.response.rect.contains(p)
+                    && !ui.ctx().layer_id_at(p).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
+            });
+        // Commit deferred field edits before the page press can move the document's caret.
+        if outside
+            && let Some(id) = ui.ctx().memory(|m| m.focused()).filter(|id| ui.ctx().read_response(*id).is_some_and(|r| r.layer_id == preview_layer))
+        {
+            ui.ctx().memory_mut(|m| m.surrender_focus(id));
+        }
         egui::Area::new(egui::Id::new("ribbon_preview")).order(egui::Order::Foreground).fixed_pos(tabs.response.rect.left_bottom()).show(
             ui.ctx(),
             |ui| {
@@ -584,11 +595,6 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Fields, lists and collapsed groups own Escape before the temporary ribbon does.
         let child_open = child_open || field_was_focused || field_focused || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
         app.escape_free = false;
-        let outside = ui.input(|i| i.pointer.any_pressed())
-            && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
-                !tabs.response.rect.contains(p)
-                    && !ui.ctx().layer_id_at(p).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
-            });
         let escape = !child_open && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         if outside || escape || drag_stopped {
             app.ribbon_preview = false;
@@ -3179,6 +3185,46 @@ mod tests {
         h.event(egui::Event::Text("!".into()));
         h.run_steps(3);
         assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('!'), "typing returns to the page after release");
+    }
+
+    /// Pressing the page commits a deferred field edit before dismissing its preview.
+    #[test]
+    fn preview_field_commits_when_pressing_the_page() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text\nNext")), crate::Services::default());
+        app.ui.ribbon_collapsed = true;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label("Layout").click();
+        h.run_steps(4);
+        h.get_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().click();
+        h.run_steps(3);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("2".into()));
+        h.run_steps(3);
+        assert!(h.state().ribbon_preview, "typing a deferred value keeps the preview open");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Text\nNext", "typing belongs to the field");
+        let edited = h.state().session.sel.focus.clone();
+        let pos = h.state().canvas.canvas_rect.unwrap().center();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerMoved(pos));
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.run_steps(3);
+        }
+        let indent = h.state().session.doc.para_at(&edited).unwrap().props.indent_left.unwrap_or(0.0);
+        assert!((indent - 2.0 * crate::options::unit().pt_per_unit()).abs() < 0.1, "pressing the page commits the indentation: {indent}");
+        assert_eq!(
+            h.state().session.doc.para_at(&h.state().session.sel.focus).unwrap().props.indent_left.unwrap_or(0.0),
+            0.0,
+            "the clicked paragraph is unchanged"
+        );
+        assert!(!h.state().ribbon_preview && h.state().ui.ribbon_collapsed);
     }
 
     /// Find keeps typing in navigation search when its ribbon command dismisses a temporary preview.
