@@ -580,6 +580,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         );
         let field_focused = ui.ctx().memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id)).is_some_and(|r| r.layer_id == preview_layer);
         ui.data_mut(|d| d.insert_temp(preview_layer.id, app.ribbon_preview && field_focused));
+        let drag_stopped = ui.ctx().drag_stopped_id().and_then(|id| ui.ctx().read_response(id)).is_some_and(|r| r.layer_id == preview_layer);
         // Fields, lists and collapsed groups own Escape before the temporary ribbon does.
         let child_open = child_open || field_was_focused || field_focused || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
         app.escape_free = false;
@@ -589,9 +590,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     && !ui.ctx().layer_id_at(p).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
             });
         let escape = !child_open && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-        if outside || escape {
+        if outside || escape || drag_stopped {
             app.ribbon_preview = false;
-            if escape {
+            if escape || drag_stopped {
                 app.canvas.want_focus = true;
             }
         }
@@ -3137,6 +3138,44 @@ mod tests {
         let indent = h.state().session.doc.para_at(&h.state().session.sel.focus).unwrap().props.indent_left.unwrap();
         assert!((indent - crate::options::unit().pt_per_unit()).abs() < 0.1, "Enter applies the indentation");
         assert!(!h.state().ribbon_preview, "committing the command dismisses the preview");
+    }
+
+    /// A numeric field keeps its preview through intermediate drag commands and closes on release.
+    #[test]
+    fn preview_field_drag_applies_multiple_steps_before_closing() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        app.ui.ribbon_collapsed = true;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label("Layout").click();
+        h.run_steps(4);
+        let mut pos = h.get_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().rect().center();
+        h.event(egui::Event::PointerMoved(pos));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.run_steps(1);
+        let mut values = Vec::new();
+        for _ in 0..3 {
+            pos.x += 10.0;
+            h.event(egui::Event::PointerMoved(pos));
+            h.run_steps(2);
+            assert!(h.state().ribbon_preview, "intermediate drag commands keep the preview open");
+            values.push(h.state().session.doc.para_at(&h.state().session.sel.focus).unwrap().props.indent_left.unwrap_or(0.0));
+        }
+        assert!(values[2] > values[1] && values[1] > values[0], "each drag step changes indentation: {values:?}");
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.run_steps(3);
+        assert!(!h.state().ribbon_preview && h.state().ui.ribbon_collapsed, "releasing the field closes the temporary ribbon");
+        h.event(egui::Event::Text("!".into()));
+        h.run_steps(3);
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('!'), "typing returns to the page after release");
     }
 
     /// Find keeps typing in navigation search when its ribbon command dismisses a temporary preview.

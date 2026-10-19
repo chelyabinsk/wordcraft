@@ -848,7 +848,9 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        let dismiss_preview = self.ribbon_preview && !matches!(id, "ui.tab" | "ui.collapseRibbon");
+        // Numeric fields dispatch intermediate values while the pointer is still dragging.
+        let dragging = self.ctx.as_ref().is_some_and(|ctx| ctx.dragged_id().is_some());
+        let dismiss_preview = self.ribbon_preview && !dragging && !matches!(id, "ui.tab" | "ui.collapseRibbon");
         if dismiss_preview {
             self.ribbon_preview = false;
         }
