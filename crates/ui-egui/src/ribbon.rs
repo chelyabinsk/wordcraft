@@ -584,8 +584,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Fields, lists and collapsed groups own Escape before the temporary ribbon does.
         let child_open = child_open || field_was_focused || field_focused || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
         app.escape_free = false;
-        let outside = ui.input(|i| i.pointer.any_click())
-            && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| {
+        let outside = ui.input(|i| i.pointer.any_pressed())
+            && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
                 !tabs.response.rect.contains(p)
                     && !ui.ctx().layer_id_at(p).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
             });
@@ -3092,9 +3092,12 @@ mod tests {
         h.get_by_label("Home").click();
         h.run_steps(4);
         let pos = h.state().canvas.canvas_rect.unwrap().center();
-        for pressed in [true, false] {
+        for (pos, pressed) in [(pos, true), (pos + vec2(30.0, 0.0), false)] {
+            h.event(egui::Event::PointerMoved(pos));
+            h.run_steps(1);
             h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
             h.run_steps(1);
+            assert!(!h.state().ribbon_preview, "a page press dismisses the ribbon even when it becomes a drag");
         }
         h.run_steps(3);
         assert!(!h.state().ribbon_preview && h.state().ui.ribbon_collapsed);

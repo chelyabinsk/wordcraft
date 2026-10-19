@@ -31,7 +31,7 @@ Legacy Word imports (#2445): interactive Save for `.doc`/`.dot` uses the existin
 
 Active footnote and endnote text stays readable while editing (#2545). This fixes a display-context defect; the broader fidelity, accessibility and readiness gates below are unchanged.
 
-A visible ribbon collapse/expand control and temporary tab reveal are now provided; numeric field drags stay open until release. This closes the discoverability gap without changing the estimates below.
+A visible ribbon collapse/expand control and temporary tab reveal are now provided; numeric field drags stay open until release; page presses dismiss it before selection drags. This closes the discoverability gap without changing the estimates below.
 
 ## Ranked
 
@@ -108,7 +108,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-19 | trivial | Visible ribbon collapse/expand chevron, temporary tab reveal and pin control, using the existing commands; numeric field drags keep the preview open until release |
+| 2026-10-19 | trivial | Visible ribbon collapse/expand chevron, temporary tab reveal and pin control, using the existing commands; numeric field drags keep the preview open until release, and page presses dismiss it before selection drags |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
 | 2026-10-17 | trivial | #1327: Restrict Editing exceptions no longer let table, row or cell formatting change protected tables; formatting-only protection refuses Paste Formatting, table shading/borders/alignment/margins/text direction, table-style edits and locked table styles; recipient-list commands no longer rewrite merge-field results in a protected document. No gap row (enforcement fix); estimates unchanged |
 | 2026-10-17 | trivial | #21: Find in list and "Show only records that will be merged" in Edit Recipient List (#1576) |
