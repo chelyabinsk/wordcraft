@@ -3146,6 +3146,41 @@ mod tests {
         assert!(!h.state().ribbon_preview, "committing the command dismisses the preview");
     }
 
+    /// Find keeps typing in navigation search when its ribbon command dismisses a temporary preview.
+    #[test]
+    fn preview_find_keeps_navigation_search_focus() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        app.ui.ribbon_collapsed = true;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label("Home").click();
+        h.run_steps(4);
+        assert!(h.state().ribbon_preview);
+        h.get_by_label("Find").click();
+        h.run_steps(3);
+        let shortcut = crate::widgets::shortcut_text(h.state(), "edit.find");
+        h.get_by_label_contains(&shortcut).click();
+        h.run_steps(3);
+        assert!(!h.state().ribbon_preview);
+        h.event(egui::Event::Text("needle".into()));
+        h.run_steps(3);
+        assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("nav_query"))).as_deref(), Some("needle"));
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Text");
+        let app = h.state_mut();
+        app.ribbon_preview = true;
+        app.canvas.want_focus = false;
+        app.run("para.dialog", json!({})).unwrap();
+        assert!(app.dialog.is_some());
+        assert!(!app.canvas.want_focus, "a dialog keeps focus when the preview closes");
+    }
+
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
     #[test]
     fn double_click_on_format_painter_makes_it_sticky() {

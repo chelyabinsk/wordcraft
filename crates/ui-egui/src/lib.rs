@@ -848,10 +848,19 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        if self.ribbon_preview && !matches!(id, "ui.tab" | "ui.collapseRibbon") {
+        let dismiss_preview = self.ribbon_preview && !matches!(id, "ui.tab" | "ui.collapseRibbon");
+        if dismiss_preview {
             self.ribbon_preview = false;
+        }
+        let result = self.run_user_command(id, params);
+        if dismiss_preview && self.dialog.is_none() && !self.nav_search_focus {
             self.canvas.want_focus = true;
         }
+        result
+    }
+
+    /// Dispatch a user command, opening input or save dialogs when needed.
+    fn run_user_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
