@@ -489,81 +489,81 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let rect = ui.max_rect();
         ribbon_toggle(app, ui, Rect::from_min_size(rect.right_bottom() - vec2(22.0, 22.0), vec2(22.0, 22.0)));
         // Keep groups, launchers and overflow arrows out of the toggle's gutter.
-        let mut content =
-            ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(rect.min, pos2((rect.right() - 24.0).max(rect.left()), rect.bottom()))));
-        let ui = &mut content;
-        // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
-        // the buttons drawn over it keep their own clicks.
-        // No document open (#1129): every command is greyed out but Help's.
-        if !app.has_document() && app.ui.tab != "Help" {
-            ui.disable();
-        }
-        let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
-        bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
-        let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
-        crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
-        let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                match entry {
-                    // Every tab hidden: nothing to show.
-                    Some(e) if e.hidden => return,
-                    Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
-                    _ => {}
-                }
-                match app.ui.tab.as_str() {
-                    "Home" => home(app, ui),
-                    "Insert" => insert(app, ui),
-                    "Draw" => draw(app, ui),
-                    "Design" => design(app, ui),
-                    "Layout" => layout(app, ui),
-                    "References" => references(app, ui),
-                    "Mailings" => mailings(app, ui),
-                    "Review" => review(app, ui),
-                    "View" => view(app, ui),
-                    "Developer" => developer(app, ui),
-                    "Zotero" => zotero(app, ui),
-                    "Help" => help(app, ui),
-                    "Table Design" => table_design(app, ui),
-                    "Table Layout" => table_layout(app, ui),
-                    "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
-                    "Picture Format" => picture_format(app, ui),
-                    "Shape Format" => shape_format(app, ui),
-                    "SmartArt Design" => smart_art_design(app, ui),
-                    "Outlining" => outlining(app, ui),
-                    "Chart Design" => chart_design(app, ui),
-                    _ => home(app, ui),
-                }
-                if let Some(e) = entry {
-                    custom_groups(app, ui, &e.groups);
-                }
+        let content_rect = Rect::from_min_max(rect.min, pos2((rect.right() - 24.0).max(rect.left()), rect.bottom()));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+            // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
+            // the buttons drawn over it keep their own clicks.
+            // No document open (#1129): every command is greyed out but Help's.
+            if !app.has_document() && app.ui.tab != "Help" {
+                ui.disable();
+            }
+            let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
+            bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+            let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
+            crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
+            let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                    match entry {
+                        // Every tab hidden: nothing to show.
+                        Some(e) if e.hidden => return,
+                        Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
+                        _ => {}
+                    }
+                    match app.ui.tab.as_str() {
+                        "Home" => home(app, ui),
+                        "Insert" => insert(app, ui),
+                        "Draw" => draw(app, ui),
+                        "Design" => design(app, ui),
+                        "Layout" => layout(app, ui),
+                        "References" => references(app, ui),
+                        "Mailings" => mailings(app, ui),
+                        "Review" => review(app, ui),
+                        "View" => view(app, ui),
+                        "Developer" => developer(app, ui),
+                        "Zotero" => zotero(app, ui),
+                        "Help" => help(app, ui),
+                        "Table Design" => table_design(app, ui),
+                        "Table Layout" => table_layout(app, ui),
+                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
+                        "Picture Format" => picture_format(app, ui),
+                        "Shape Format" => shape_format(app, ui),
+                        "SmartArt Design" => smart_art_design(app, ui),
+                        "Outlining" => outlining(app, ui),
+                        "Chart Design" => chart_design(app, ui),
+                        _ => home(app, ui),
+                    }
+                    if let Some(e) = entry {
+                        custom_groups(app, ui, &e.groups);
+                    }
+                });
             });
+            crate::ribbon_fit::end(ui.ctx());
+            // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
+            // where more is and scroll it on click. Every command also stays reachable through Search Commands.
+            let r = scroll.inner_rect;
+            let overflow = scroll.content_size.x - r.width();
+            let offset = scroll.state.offset.x;
+            let step = 160.0;
+            let mut next = None;
+            if offset > 1.0 {
+                let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
+                if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
+                    next = Some(offset - step);
+                }
+            }
+            if overflow - offset > 1.0 {
+                let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
+                if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
+                    next = Some(offset + step);
+                }
+            }
+            if let Some(x) = next {
+                let mut state = scroll.state;
+                state.offset.x = x.clamp(0.0, overflow.max(0.0));
+                state.store(ui.ctx(), scroll.id);
+            }
         });
-        crate::ribbon_fit::end(ui.ctx());
-        // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
-        // where more is and scroll it on click. Every command also stays reachable through Search Commands.
-        let r = scroll.inner_rect;
-        let overflow = scroll.content_size.x - r.width();
-        let offset = scroll.state.offset.x;
-        let step = 160.0;
-        let mut next = None;
-        if offset > 1.0 {
-            let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
-            if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
-                next = Some(offset - step);
-            }
-        }
-        if overflow - offset > 1.0 {
-            let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
-            if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
-                next = Some(offset + step);
-            }
-        }
-        if let Some(x) = next {
-            let mut state = scroll.state;
-            state.offset.x = x.clamp(0.0, overflow.max(0.0));
-            state.store(ui.ctx(), scroll.id);
-        }
     };
     let panel = egui::Panel::top("ribbon").exact_size(CONTENT_H + LABEL_H + 10.0).frame(frame);
     if preview {
@@ -603,24 +603,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
 /// The ribbon's persistent toggle: bottom-right when expanded, on the tab strip when collapsed.
 fn ribbon_toggle(app: &mut WordApp, ui: &mut Ui, rect: Rect) {
-    let label = tl!(if app.ribbon_preview {
-        "Pin ribbon"
+    let (label, icon) = if app.ribbon_preview {
+        (tl!("Pin ribbon"), "pin")
     } else if app.ui.ribbon_collapsed {
-        "Expand ribbon"
+        (tl!("Expand ribbon"), "chevronDown")
     } else {
-        "Collapse ribbon"
-    });
+        (tl!("Collapse ribbon"), "chevronUp")
+    };
     let response = ui.interact(rect, egui::Id::new("ribbon_toggle"), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     let style = crate::widgets::drawn_state(ui, &response, false);
     ui.painter().rect_filled(rect, 4.0, style.fill);
-    let icon = if app.ribbon_preview {
-        "pin"
-    } else if app.ui.ribbon_collapsed {
-        "chevronDown"
-    } else {
-        "chevronUp"
-    };
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, style.text, style.text);
     if response.on_hover_text(label).clicked() {
         let _ = app.run("ui.collapseRibbon", json!({}));
