@@ -1,5 +1,6 @@
 //! Ribbon widgets: large and small buttons, split buttons, groups, combo fields, colour grids.
 
+use egui::PopupCloseBehavior::{CloseOnClick, CloseOnClickOutside};
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::Value;
 
@@ -388,7 +389,7 @@ pub fn menu_button(
     id: &str,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
-    menu_button_with_behavior(ui, app, icon, label, tip, big_btn, id, egui::PopupCloseBehavior::CloseOnClick, menu);
+    menu_button_with_behavior(ui, app, icon, label, tip, big_btn, id, CloseOnClick, menu);
 }
 
 /// Keep editable group popups open on inside clicks while ordinary command menus retain their behavior.
@@ -452,7 +453,7 @@ fn menu_button_with_behavior(
         ui.set_min_width(200.0);
         menu(ui, app);
     };
-    if close_behavior == egui::PopupCloseBehavior::CloseOnClickOutside {
+    if close_behavior == CloseOnClickOutside {
         egui::Popup::menu(&resp).close_behavior(close_behavior).show(content);
     } else {
         ribbon_popup(ui, &resp, content);
@@ -491,21 +492,11 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
             || (app.ui.tab == "Layout" && id_title == "Paragraph")
             || (app.ui.tab == "Table Layout" && matches!(id_title, "Cell Size" | "Data"))
         {
-            menu_button_with_behavior(
-                ui,
-                app,
-                group_icon(id_title),
-                None,
-                title,
-                false,
-                "",
-                egui::PopupCloseBehavior::CloseOnClickOutside,
-                |ui, app| {
-                    ui.scope_builder(egui::UiBuilder::new().ui_stack_info(egui::UiStackInfo::default().with_tag("ribbon_group_popup")), |ui| {
-                        ui.horizontal_top(|ui| controls(ui, app));
-                    });
-                },
-            );
+            menu_button_with_behavior(ui, app, group_icon(id_title), None, title, false, "", CloseOnClickOutside, |ui, app| {
+                ui.scope_builder(egui::UiBuilder::new().ui_stack_info(egui::UiStackInfo::default().with_tag("ribbon_group_popup")), |ui| {
+                    ui.horizontal_top(|ui| controls(ui, app));
+                });
+            });
         } else {
             let row = ui.horizontal_centered(|ui| controls(ui, app));
             #[cfg(test)]
