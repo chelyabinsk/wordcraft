@@ -497,7 +497,13 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
         {
             menu_button_with_behavior(ui, app, group_icon(id_title), None, title, false, "", CloseOnClickOutside, |ui, app| {
                 ui.scope_builder(egui::UiBuilder::new().ui_stack_info(egui::UiStackInfo::default().with_tag("ribbon_group_popup")), |ui| {
-                    ui.horizontal_top(|ui| controls(ui, app));
+                    if id_title == "Drawing Tools" {
+                        egui::ScrollArea::horizontal().max_width(ui.available_width()).show(ui, |ui| {
+                            ui.horizontal_top(|ui| controls(ui, app));
+                        });
+                    } else {
+                        ui.horizontal_top(|ui| controls(ui, app));
+                    }
                 });
             });
         } else {
